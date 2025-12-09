@@ -47,12 +47,29 @@
                                       maxLength="6"/>
                                
                                 <Label id="_IDGenLabel1" text="Carrier Number" required="true"/>
-                                <Input id="carrierInput"
-                                      change="onDocumentDetailsChange"
-                                      placeholder="carrier number"
-                                      width="250px"
-                                      maxLength="15"/>
-
+                                <HBox alignItems="Center" justifyContent="Start">
+                                    
+                                    <!-- <Button id="carrierScanBtn" 
+                                        type="Transparent" 
+                                        icon="sap-icon://web-cam" 
+                                        press="onContainerScan"
+                                        tooltip="Scan Carrier Number"/> -->
+                                    <Input id="carrierInput"
+                                        change="onDocumentDetailsChange"
+                                        placeholder="carrier number"
+                                        width="250px"
+                                        maxLength="15"
+                                        showValueHelp = "true"
+                                        valueHelpOnly = "false"
+                                        valueHelpIconSrc = "sap-icon://camera"
+                                        valueHelpRequest = "onContainerScan"
+                                        />
+                                    
+                                     
+                                        
+                                </HBox>
+                               
+                                    
                                 <Label id="_IDGenLabelCarrierLine" text="Carrier Line" required="true" visible="{/showCarrierLineCombo}"/>
                                 <ComboBox id="carrierLineCombo"
                                         change="onDocumentDetailsChange"

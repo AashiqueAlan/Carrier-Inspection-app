@@ -1,12 +1,19 @@
 sap.ui.define([
     "sap/ui/core/mvc/Controller",
     "sap/ui/model/json/JSONModel",
-    "sap/ui/model/Filter",
-    "sap/ui/model/FilterOperator",
     "sap/m/MessageToast",
     "sap/m/MessageBox",
-    "insptrack/lib/pdfMakeLoader"
-], (Controller, JSONModel, Filter, FilterOperator, MessageToast, MessageBox, pdfMakeLoader) => {
+    "insptrack/util/UserHelper",
+    "insptrack/util/DescriptionHelper",
+    "insptrack/util/FilterHelper",
+    "insptrack/util/ErrorHandler",
+    "insptrack/service/InspectionCodeService",
+    "insptrack/service/ODataService",
+    "insptrack/service/ValidationService",
+    "insptrack/service/ImageService",
+    "insptrack/service/PDFService",
+    "insptrack/util/YOLOInference"
+], (Controller, JSONModel, MessageToast, MessageBox, UserHelper, DescriptionHelper, FilterHelper, ErrorHandler, InspectionCodeService, ODataService, ValidationService, ImageService, PDFService, YOLOInference) => {
     "use strict";
 
     return Controller.extend("insptrack.controller.Main", {
@@ -19,6 +26,18 @@ sap.ui.define([
             this._loadCarrierTypes();
             this._loadInspectionCodes();
             this._wizard.attachStepActivate(this.onWizardStepActivate, this);
+            this._initializeYOLOModel();
+        },
+
+        async _initializeYOLOModel() {
+            try {
+                console.log("🚀 Initializing YOLO model at startup...");
+                await YOLOInference.loadModel();
+                console.log("✅ YOLO model loaded successfully at startup!");
+            } catch (error) {
+                console.error("❌ Failed to initialize YOLO model:", error);
+                MessageToast.show("Warning: Container detection model failed to load. Manual entry will be required.");
+            }
         },
 
         _initializeModel() {
@@ -71,159 +90,65 @@ sap.ui.define([
         // ========================================
 
         _createHeaderFilters() {
-            return [
-                new Filter("Document", FilterOperator.EQ, this.oModel.getProperty("/document")),
-                new Filter("Sequencenumber", FilterOperator.EQ, this.oModel.getProperty("/sequenceNumber")),
-                new Filter("CarrierNumber", FilterOperator.EQ, this.oModel.getProperty("/carrierNumber"))
-            ];
+            return FilterHelper.createHeaderFilters(
+                this.oModel.getProperty("/document"),
+                this.oModel.getProperty("/sequenceNumber"),
+                this.oModel.getProperty("/carrierNumber")
+            );
         },
 
         _getTextToCodeMap() {
             const aInspectionCodesLeft = this.oModel.getProperty("/inspectionCodesLeft") || [];
             const aInspectionCodesRight = this.oModel.getProperty("/inspectionCodesRight") || [];
-            const aAllInspectionCodes = [...aInspectionCodesLeft, ...aInspectionCodesRight];
-
-            const textToCodeMap = {};
-            aAllInspectionCodes.forEach(item => {
-                textToCodeMap[item.text] = item.code;
-            });
-            return textToCodeMap;
+            return InspectionCodeService.getTextToCodeMap(aInspectionCodesLeft, aInspectionCodesRight);
         },
 
         _getCarrierTypeDescription(sCarrierTypeCode) {
             const aCarrierTypes = this.oModel.getProperty("/CarrierTypes") || [];
-            console.log("Getting carrier type description for code:", sCarrierTypeCode);
-            console.log("Available carrier types:", aCarrierTypes);
-
-            // Match against CarrierTypeCode field
-            const oCarrierType = aCarrierTypes.find(item => item.CarrierTypeCode === sCarrierTypeCode);
-
-            if (oCarrierType) {
-                // Get description from CarrierTypeCodeText field
-                const description = oCarrierType.CarrierTypeCodeText;
-                console.log("Found carrier type description:", description);
-                return description || sCarrierTypeCode;
-            }
-
-            console.log("Carrier type not found, returning code:", sCarrierTypeCode);
-            return sCarrierTypeCode;
+            return DescriptionHelper.getCarrierTypeDescription(aCarrierTypes, sCarrierTypeCode);
         },
 
         _getCarrierLineDescription(sCarrierLineCode) {
             const aCarrierLines = this.oModel.getProperty("/CarrierLines") || [];
-            console.log("Getting carrier line description for code:", sCarrierLineCode);
-            console.log("Available carrier lines:", aCarrierLines);
-
-            // Match against CarrierLineCode field
-            const oCarrierLine = aCarrierLines.find(item => item.CarrierLineCode === sCarrierLineCode);
-
-            if (oCarrierLine) {
-                // Get description from CarrierLineCodeText field
-                const description = oCarrierLine.CarrierLineCodeText;
-                console.log("Found carrier line description:", description);
-                return description || sCarrierLineCode;
-            }
-
-            console.log("Carrier line not found, returning code:", sCarrierLineCode);
-            return sCarrierLineCode;
+            return DescriptionHelper.getCarrierLineDescription(aCarrierLines, sCarrierLineCode);
         },
 
         _buildSelectedCodes(oDefectCodes) {
             const textToCodeMap = this._getTextToCodeMap();
-            const oCurrentDate = new Date();
-            const aSelectedCodes = [];
-            let iSeq = 1;
-
-            Object.keys(oDefectCodes).forEach(sKey => {
-                if (oDefectCodes[sKey]) {
-                    const sCodeValue = textToCodeMap[sKey];
-                    if (!sCodeValue) {
-                        console.error("Could not find code for text:", sKey);
-                        return;
-                    }
-                    aSelectedCodes.push({
-                        Document: this.oModel.getProperty("/document"),
-                        Sequencenumber: this.oModel.getProperty("/sequenceNumber"),
-                        CarrierNumber: this.oModel.getProperty("/carrierNumber"),
-                        InspectionDate: `/Date(${oCurrentDate.getTime()})/`,
-                        CodeSeq: iSeq.toString().padStart(2, '0'),
-                        CodeValue: sCodeValue,
-                        CodeText: sKey,
-                        CreatedOn: `/Date(${oCurrentDate.getTime()})/`,
-                        CreatedBy: "USER"
-                    });
-                    iSeq++;
-                }
-            });
-
-            return aSelectedCodes;
+            return InspectionCodeService.buildSelectedCodes(
+                oDefectCodes,
+                textToCodeMap,
+                this.oModel.getProperty("/document"),
+                this.oModel.getProperty("/sequenceNumber"),
+                this.oModel.getProperty("/carrierNumber")
+            );
         },
 
         _createDeepEntityPayload(aSelectedCodes, sStatus) {
-            const oCurrentDate = new Date();
-            return {
-                Document: this.oModel.getProperty("/document"),
-                Sequencenumber: this.oModel.getProperty("/sequenceNumber"),
-                CarrierNumber: this.oModel.getProperty("/carrierNumber"),
-                CarrierLineCode: this.oModel.getProperty("/carrierLine"),
-                CarrierTyCode: this.oModel.getProperty("/carrierType"),
-                InspectionDate: `/Date(${oCurrentDate.getTime()})/`,
-                Status: sStatus,
-                HasBeforeImg: false,
-                HasAfterImg: false,
-                CreatedBy: "USER",
-                CreatedOn: `/Date(${oCurrentDate.getTime()})/`,
-                ChangedBy: "USER",
-                ChangedOn: `/Date(${oCurrentDate.getTime()})/`,
-                np_on_Codes: aSelectedCodes
-            };
+            return InspectionCodeService.createDeepEntityPayload(
+                aSelectedCodes,
+                sStatus,
+                this.oModel.getProperty("/document"),
+                this.oModel.getProperty("/sequenceNumber"),
+                this.oModel.getProperty("/carrierNumber"),
+                this.oModel.getProperty("/carrierLine"),
+                this.oModel.getProperty("/carrierType")
+            );
         },
 
         _parseErrorMessage(oError) {
-            let sErrorMessage = "Operation failed";
-            if (oError.responseText) {
-                try {
-                    const oErrorResponse = JSON.parse(oError.responseText);
-                    if (oErrorResponse.error && oErrorResponse.error.message) {
-                        sErrorMessage = oErrorResponse.error.message.value || oErrorResponse.error.message;
-                    }
-                } catch (e) {
-                    sErrorMessage = oError.responseText;
-                }
-            }
-            return sErrorMessage;
+            return ErrorHandler.parseErrorMessage(oError);
         },
 
         async _loadPdfMake() {
-            try {
-                await pdfMakeLoader.load();
-                console.log("pdfMake loaded successfully via UI5 module");
-            } catch (error) {
-                console.error("Failed to load pdfMake:", error);
-                throw new Error("Failed to load PDF library: " + error.message);
-            }
+            await PDFService.loadPdfMake();
         },
 
         _cleanupCamera() {
-            if (this._stream) {
-                this._stream.getTracks().forEach(track => track.stop());
-                this._stream = null;
-            }
-
-            if (this._videoElement) {
-                if (this._videoElement.srcObject) {
-                    this._videoElement.srcObject = null;
-                }
-                if (this._videoElement.parentNode) {
-                    this._videoElement.parentNode.removeChild(this._videoElement);
-                }
-                this._videoElement = null;
-            }
-
-            var oContainer = sap.ui.getCore().byId("cameraVideoContainer");
-            if (oContainer && oContainer.getDomRef()) {
-                oContainer.getDomRef().innerHTML = "";
-            }
+            ImageService.cleanupCamera();
+            ImageService.clearCameraContainer("cameraVideoContainer");
+            this._stream = null;
+            this._videoElement = null;
         },
 
         _clearInputFields() {
@@ -251,22 +176,18 @@ sap.ui.define([
         },
 
         _validateStep1() {
-            const sDocument = this.oModel.getProperty("/document");
-            const sSequence = this.oModel.getProperty("/sequenceNumber");
-            const sCarrier = this.oModel.getProperty("/carrierNumber");
-            const sCarrierLine = this.oModel.getProperty("/carrierLine");
-            const sCarrierType = this.oModel.getProperty("/carrierType");
+            const oData = {
+                document: this.oModel.getProperty("/document"),
+                sequenceNumber: this.oModel.getProperty("/sequenceNumber"),
+                carrierNumber: this.oModel.getProperty("/carrierNumber"),
+                carrierLine: this.oModel.getProperty("/carrierLine"),
+                carrierType: this.oModel.getProperty("/carrierType")
+            };
             const showCarrierLineCombo = this.oModel.getProperty("/showCarrierLineCombo");
             const showCarrierTypeCombo = this.oModel.getProperty("/showCarrierTypeCombo");
 
             const oStep1 = this.byId("DocumentDetailsStep");
-
-            // Check if all required fields are filled (trim to handle spaces)
-            const bAllRequiredFieldsFilled = (sDocument && sDocument.trim().length > 0) &&
-                (sSequence && sSequence.trim().length > 0) &&
-                (sCarrier && sCarrier.trim().length > 0) &&
-                (showCarrierLineCombo ? (sCarrierLine && sCarrierLine.trim().length > 0) : true) &&
-                (showCarrierTypeCombo ? (sCarrierType && sCarrierType.trim().length > 0) : true);
+            const bAllRequiredFieldsFilled = ValidationService.validateStep1(oData, showCarrierLineCombo, showCarrierTypeCombo);
 
             if (bAllRequiredFieldsFilled) {
                 if (!oStep1.getValidated()) {
@@ -287,76 +208,38 @@ sap.ui.define([
 
         _loadCarrierLines() {
             const oDataModel = this.getOwnerComponent().getModel();
-            console.log("Loading Carrier Lines...");
-
-            oDataModel.read("/VH_CarrierlineSet", {
-                success: (oData) => {
-                    console.log("Carrier lines Loaded Successfully:", oData.results);
-                    this.oModel.setProperty("/CarrierLines", oData.results);
-                },
-                error: (oError) => {
-                    console.error("Error loading carrier lines:", oError);
+            ODataService.loadCarrierLines(oDataModel)
+                .then((results) => {
+                    this.oModel.setProperty("/CarrierLines", results);
+                })
+                .catch((oError) => {
                     MessageBox.error(this._parseErrorMessage(oError) || "Failed to load carrier lines");
-                }
-            });
+                });
         },
 
         _loadCarrierTypes() {
             const oDataModel = this.getOwnerComponent().getModel();
-            console.log("Loading Carrier Types...");
-
-            oDataModel.read("/VH_CarrierTypeSet", {
-                success: (oData) => {
-                    console.log("Carrier types Loaded Successfully:", oData.results);
-                    this.oModel.setProperty("/CarrierTypes", oData.results);
-                },
-                error: (oError) => {
-                    console.error("Error loading carrier types:", oError);
+            ODataService.loadCarrierTypes(oDataModel)
+                .then((results) => {
+                    this.oModel.setProperty("/CarrierTypes", results);
+                })
+                .catch((oError) => {
                     MessageBox.error(this._parseErrorMessage(oError) || "Failed to load carrier types");
-                }
-            });
+                });
         },
 
         _loadInspectionCodes() {
             const oDataModel = this.getOwnerComponent().getModel();
-            console.log("=== LOADING INSPECTION CODES ===");
-
-            oDataModel.read("/InspectCodesSet", {
-                success: (oData) => {
-                    console.log("SUCCESS - Inspection codes loaded");
-
-                    if (!oData.results || oData.results.length === 0) {
-                        console.error("Backend returned empty results!");
-                        MessageBox.warning("No inspection codes found in backend table");
-                        return;
-                    }
-
-                    const oDefectCodes = {};
-                    const aInspectionCodes = [];
-
-                    oData.results.forEach((item) => {
-                        const sKey = item.InspectionCodeText;
-                        oDefectCodes[sKey] = false;
-                        aInspectionCodes.push({
-                            key: sKey,
-                            code: item.InspectionCode,
-                            text: item.InspectionCodeText
-                        });
-                    });
-
-                    const half = Math.ceil(aInspectionCodes.length / 2);
-                    const aInspectionCodesLeft = aInspectionCodes.slice(0, half);
-                    const aInspectionCodesRight = aInspectionCodes.slice(half);
-
-                    this.oModel.setProperty("/defectCodes", oDefectCodes);
-                    this.oModel.setProperty("/inspectionCodesLeft", aInspectionCodesLeft);
-                    this.oModel.setProperty("/inspectionCodesRight", aInspectionCodesRight);
-                },
-                error: (oError) => {
-                    console.error("Error loading inspection codes:", oError);
+            ODataService.loadInspectionCodes(oDataModel)
+                .then((results) => {
+                    const processedData = InspectionCodeService.processInspectionCodes(results);
+                    this.oModel.setProperty("/defectCodes", processedData.defectCodes);
+                    this.oModel.setProperty("/inspectionCodesLeft", processedData.inspectionCodesLeft);
+                    this.oModel.setProperty("/inspectionCodesRight", processedData.inspectionCodesRight);
+                })
+                .catch((oError) => {
                     MessageBox.error(this._parseErrorMessage(oError) || "Failed to load inspection codes");
-                }
-            });
+                });
         },
 
         // ========================================
@@ -400,9 +283,7 @@ sap.ui.define([
             const oStep1 = this.byId("DocumentDetailsStep");
 
             // Check if first 3 fields are filled to trigger record existence check
-            const bFirst3FieldsFilled = (sDocument && sDocument.length > 0) &&
-                (sSequence && sSequence.length > 0) &&
-                (sCarrier && sCarrier.length > 0);
+            const bFirst3FieldsFilled = ValidationService.validateFirst3Fields(sDocument, sSequence, sCarrier);
 
             if (bFirst3FieldsFilled) {
                 this.oModel.setProperty("/document", sDocument);
@@ -425,33 +306,18 @@ sap.ui.define([
         },
 
         _checkRecordExists(sDocument, sSequence, sCarrier) {
-            console.log("Checking record existence for:", sDocument, sSequence, sCarrier);
-
-            const aFilters = [
-                new Filter("Document", FilterOperator.EQ, sDocument),
-                new Filter("Sequencenumber", FilterOperator.EQ, sSequence),
-                new Filter("CarrierNumber", FilterOperator.EQ, sCarrier)
-            ];
-
             const oModel = this.getOwnerComponent().getModel();
 
-            oModel.read("/InspectionHeaderSet", {
-                filters: aFilters,
-                success: (oData) => {
-                    console.log("Record check response:", oData);
-
-                    if (oData.results && oData.results.length > 0) {
-                        const oRecord = oData.results[0];
+            ODataService.checkRecordExists(oModel, sDocument, sSequence, sCarrier)
+                .then((oRecord) => {
+                    if (oRecord) {
                         this._handleExistingRecord(oRecord);
                     } else {
                         this._handleNewRecord();
                     }
-
-                    // Validate step only if all required fields are filled
                     this._validateStep1();
-                },
-                error: (oError) => {
-                    console.error("Error checking record existence:", oError);
+                })
+                .catch((oError) => {
                     const sErrorMsg = this._parseErrorMessage(oError) || "Validation failed. Please check your inputs.";
 
                     MessageBox.error(sErrorMsg, {
@@ -470,8 +336,7 @@ sap.ui.define([
                         console.log("Step 1 invalidated due to validation error");
                     }
                     this._resetFlags();
-                }
-            });
+                });
         },
 
         _handleExistingRecord(oRecord) {
@@ -614,23 +479,18 @@ sap.ui.define([
             oDefectCodes[sKey] = bSelected;
             this.oModel.setProperty("/defectCodes", oDefectCodes);
 
-            let bAnySelected = Object.values(oDefectCodes).some(val => val === true);
+            let bAnySelected = ValidationService.validateDefectCodes(oDefectCodes);
             this.oModel.setProperty("/showAcceptRejectButtons", bAnySelected);
 
             console.log("Any selected:", bAnySelected);
         },
 
         onAcceptCodes() {
-            // Check if codes are already saved
             const oDefectCodes = this.oModel.getProperty("/defectCodes");
             const aCurrentSelectedCodes = Object.keys(oDefectCodes).filter(key => oDefectCodes[key]);
             const aSavedCodes = this.oModel.getProperty("/savedCodes") || [];
 
-            // Sort arrays for comparison
-            const currentSorted = aCurrentSelectedCodes.sort().join(",");
-            const savedSorted = aSavedCodes.sort().join(",");
-
-            if (aSavedCodes.length > 0 && currentSorted === savedSorted) {
+            if (ValidationService.areCodesSaved(aCurrentSelectedCodes, aSavedCodes)) {
                 MessageBox.information("CODES ALREADY SAVED");
                 return;
             }
@@ -690,7 +550,7 @@ sap.ui.define([
             this._wizard.previousStep();
 
             // Then reset progress bar AFTER navigation with a small delay
-            setTimeout(function() {
+            setTimeout(function () {
                 const oStep1 = that.byId("DocumentDetailsStep");
                 const inspStep = that.byId("InspectionCodesStep");
                 const imgStep = that.byId("ImageUploadStep");
@@ -734,26 +594,17 @@ sap.ui.define([
             }
 
             const oDeepEntityData = this._createDeepEntityPayload(aSelectedCodes, sStatus);
-
-            console.log("Deep Entity Data Structure:");
-            console.log(JSON.stringify(oDeepEntityData, null, 2));
-
             const oModel = this.getOwnerComponent().getModel();
 
-            oModel.create("/InspectionHeaderSet", oDeepEntityData, {
-                success: (oData) => {
-                    console.log("SUCCESS: CREATE_DEEP_ENTITY called!");
-                    console.log("Response data:", oData);
+            ODataService.saveInspectionCodes(oModel, oDeepEntityData)
+                .then(() => {
                     if (callback) callback(true);
-                },
-                error: (oError) => {
-                    console.error("ERROR: CREATE_DEEP_ENTITY failed");
-                    console.error("Error object:", oError);
+                })
+                .catch((oError) => {
                     const sErrorMessage = this._parseErrorMessage(oError) || "Failed to save codes";
                     MessageBox.error("Save Failed:\n" + sErrorMessage);
                     if (callback) callback(false);
-                }
-            });
+                });
         },
 
         // ========================================
@@ -763,37 +614,41 @@ sap.ui.define([
         onOpenCameraDialog() {
             var that = this;
 
-            if (!this._cameraDialog) {
-                this._cameraDialog = new sap.m.Dialog({
-                    title: "Camera Preview",
-                    contentWidth: "600px",
-                    contentHeight: "420px",
-                    content: new sap.m.VBox({
-                        items: [
-                            new sap.m.VBox({
-                                id: "cameraVideoContainer",
-                                width: "100%",
-                                height: "400px"
-                            })
-                        ]
-                    }),
-                    beginButton: new sap.m.Button({
-                        text: "Capture",
-                        type: "Emphasized",
-                        press: function () { that.onCapture(); }
-                    }),
-                    endButton: new sap.m.Button({
-                        text: "Cancel",
-                        press: function () {
-                            that.onCloseCameraDialog();
-                        }
-                    }),
-                    afterClose: function () {
-                        that._cleanupCamera();
-                    }
-                });
-                this.getView().addDependent(this._cameraDialog);
+            // Always recreate the dialog for image capture to avoid conflicts with container scan dialog
+            if (this._cameraDialog) {
+                this._cameraDialog.destroy();
+                this._cameraDialog = null;
             }
+
+            this._cameraDialog = new sap.m.Dialog({
+                title: "Camera Preview",
+                contentWidth: "600px",
+                contentHeight: "420px",
+                content: new sap.m.VBox({
+                    items: [
+                        new sap.m.VBox({
+                            id: "cameraVideoContainer",
+                            width: "100%",
+                            height: "400px"
+                        })
+                    ]
+                }),
+                beginButton: new sap.m.Button({
+                    text: "Capture",
+                    type: "Emphasized",
+                    press: function () { that.onCapture(); }  // ← This is the key fix
+                }),
+                endButton: new sap.m.Button({
+                    text: "Cancel",
+                    press: function () {
+                        that.onCloseCameraDialog();
+                    }
+                }),
+                afterClose: function () {
+                    that._cleanupCamera();
+                }
+            });
+            this.getView().addDependent(this._cameraDialog);
 
             this._cameraDialog.open();
 
@@ -801,31 +656,14 @@ sap.ui.define([
                 var oContainer = sap.ui.getCore().byId("cameraVideoContainer");
                 if (oContainer && oContainer.getDomRef()) {
                     var containerDom = oContainer.getDomRef();
-                    containerDom.innerHTML = "";
 
-                    var video = document.createElement("video");
-                    video.id = "cameraVideo";
-                    video.setAttribute("autoplay", true);
-                    video.style.width = "100%";
-                    video.style.height = "100%";
-                    video.style.objectFit = "cover";
-                    video.style.position = "relative";
-                    containerDom.appendChild(video);
-
-                    navigator.mediaDevices.getUserMedia({
-                        video: {
-                            facingMode: "environment",
-                            width: { ideal: 1280 },
-                            height: { ideal: 720 }
-                        }
-                    })
-                        .then(function (stream) {
-                            that._stream = stream;
-                            video.srcObject = stream;
+                    ImageService.initializeCamera(containerDom)
+                        .then(function (video) {
+                            that._stream = ImageService._stream;
                             that._videoElement = video;
                         })
                         .catch(function (err) {
-                            MessageToast.show("Cannot access camera: " + err);
+                            console.error("Camera initialization failed:", err);
                         });
                 }
             }, 300);
@@ -840,20 +678,8 @@ sap.ui.define([
                 return;
             }
 
-            var canvas = document.createElement("canvas");
-            canvas.width = video.videoWidth;
-            canvas.height = video.videoHeight;
-            canvas.getContext("2d").drawImage(video, 0, 0);
-
-            var dataURL = canvas.toDataURL("image/jpeg", 0.8);
             const imageType = this.oModel.getProperty("/currentImageType");
-
-            const oImageData = {
-                id: Date.now().toString(),
-                base64: dataURL,
-                timestamp: new Date().toISOString(),
-                type: imageType
-            };
+            const oImageData = ImageService.captureImage(video, imageType);
 
             if (imageType === "B") {
                 const aBeforeImages = this.oModel.getProperty("/beforeImages") || [];
@@ -890,7 +716,7 @@ sap.ui.define([
 
         onTakeBeforePhoto() {
             const count = this.oModel.getProperty("/beforeImageCount");
-            if (count >= 6) {
+            if (!ValidationService.validateImageCount(count, 6)) {
                 MessageBox.warning("Maximum 6 before-loading images allowed. You have already taken " + count + " images.");
                 return;
             }
@@ -899,7 +725,6 @@ sap.ui.define([
         },
 
         onTakeAfterPhoto() {
-            // Check if carrier was rejected
             const isRejected = this.oModel.getProperty("/isRejected");
             const recordStatus = this.oModel.getProperty("/recordStatus");
 
@@ -909,7 +734,7 @@ sap.ui.define([
             }
 
             const count = this.oModel.getProperty("/afterImageCount");
-            if (count >= 6) {
+            if (!ValidationService.validateImageCount(count, 6)) {
                 MessageBox.warning("Maximum 6 after-loading images allowed. You have already taken " + count + " images.");
                 return;
             }
@@ -924,10 +749,10 @@ sap.ui.define([
             const iIndex = parseInt(sPath.split("/").pop());
 
             const aBeforeImages = this.oModel.getProperty("/beforeImages");
-            aBeforeImages.splice(iIndex, 1);
+            const updatedImages = ImageService.deleteImage(aBeforeImages, iIndex);
 
-            this.oModel.setProperty("/beforeImages", aBeforeImages);
-            this.oModel.setProperty("/beforeImageCount", aBeforeImages.length);
+            this.oModel.setProperty("/beforeImages", updatedImages);
+            this.oModel.setProperty("/beforeImageCount", updatedImages.length);
 
             MessageToast.show("Before image deleted");
         },
@@ -939,10 +764,10 @@ sap.ui.define([
             const iIndex = parseInt(sPath.split("/").pop());
 
             const aAfterImages = this.oModel.getProperty("/afterImages");
-            aAfterImages.splice(iIndex, 1);
+            const updatedImages = ImageService.deleteImage(aAfterImages, iIndex);
 
-            this.oModel.setProperty("/afterImages", aAfterImages);
-            this.oModel.setProperty("/afterImageCount", aAfterImages.length);
+            this.oModel.setProperty("/afterImages", updatedImages);
+            this.oModel.setProperty("/afterImageCount", updatedImages.length);
 
             MessageToast.show("After image deleted");
         },
@@ -985,48 +810,29 @@ sap.ui.define([
                 await this._loadPdfMake();
                 console.log("pdfMake loaded");
 
-                // Fetch inspection codes and status from backend
                 const inspectionData = await this._fetchInspectionData();
-                const docDefinition = this._createPDFDefinition(imageType, aImages, inspectionData);
+                const oHeaderData = {
+                    document: this.oModel.getProperty("/document"),
+                    sequence: this.oModel.getProperty("/sequenceNumber"),
+                    carrier: this.oModel.getProperty("/carrierNumber"),
+                    carrierLineCode: this.oModel.getProperty("/carrierLine"),
+                    carrierTypeCode: this.oModel.getProperty("/carrierType")
+                };
 
-                // Get pdfMake instance from window or loader
-                const pdfMakeInstance = pdfMakeLoader.getInstance();
+                const sCurrentUser = this._getCurrentUser();
+                const docDefinition = PDFService.createPDFDefinition(
+                    imageType,
+                    aImages,
+                    inspectionData,
+                    oHeaderData,
+                    this._getCarrierLineDescription.bind(this),
+                    this._getCarrierTypeDescription.bind(this),
+                    sCurrentUser
+                );
 
-                console.log("=== DEBUG pdfMakeInstance ===");
-                console.log("pdfMakeInstance:", pdfMakeInstance);
-                console.log("typeof pdfMakeInstance:", typeof pdfMakeInstance);
-                console.log("pdfMakeInstance?.createPdf:", typeof pdfMakeInstance?.createPdf);
-                console.log("window.pdfMake:", typeof window.pdfMake);
-                console.log("window.pdfMake?.createPdf:", typeof window.pdfMake?.createPdf);
-                console.log("=== END DEBUG ===");
-
-                if (!pdfMakeInstance || typeof pdfMakeInstance.createPdf !== "function") {
-                    console.error("FAILED CHECK - Instance or createPdf missing");
-                    throw new Error("pdfMake not properly loaded - instance: " + typeof pdfMakeInstance + ", createPdf: " + typeof pdfMakeInstance?.createPdf);
-                }
-
-                console.log("pdfMake instance retrieved successfully:", typeof pdfMakeInstance, typeof pdfMakeInstance.createPdf);
-
-                const pdfBase64 = await new Promise((resolve) => {
-                    pdfMakeInstance.createPdf(docDefinition).getBase64(resolve);
-                });
-
-                console.log("PDF created successfully, length:", pdfBase64.length);
-
-                const byteCharacters = atob(pdfBase64);
-                const byteNumbers = new Array(byteCharacters.length);
-                for (let i = 0; i < byteCharacters.length; i++) {
-                    byteNumbers[i] = byteCharacters.charCodeAt(i);
-                }
-                const byteArray = new Uint8Array(byteNumbers);
-                const pdfBlob = new Blob([byteArray], { type: "application/pdf" });
-
-                console.log("PDF Blob created, size:", (pdfBlob.size / 1024 / 1024).toFixed(2), "MB");
-
-                const document = this.oModel.getProperty("/document");
-                const last2Digits = document.slice(-2);
-                const prefix = imageType === "B" ? "BI" : "AI";
-                const slug = `${document}/${prefix}Atta${last2Digits}(1).pdf`;
+                const pdfBase64 = await PDFService.generatePDF(docDefinition);
+                const pdfBlob = PDFService.base64ToBlob(pdfBase64);
+                const slug = PDFService.generateSlug(oHeaderData.document, imageType);
 
                 console.log("Upload SLUG:", slug);
 
@@ -1040,350 +846,46 @@ sap.ui.define([
         },
 
         _fetchInspectionData() {
-            return new Promise((resolve) => {
-                const aFilters = this._createHeaderFilters();
-                const oModel = this.getOwnerComponent().getModel();
-
-                oModel.read("/InspectionHeaderSet", {
-                    filters: aFilters,
-                    urlParameters: {
-                        "$expand": "np_on_Codes"
-                    },
-                    success: (oData) => {
-                        if (oData.results && oData.results.length > 0) {
-                            const oRecord = oData.results[0];
-                            const aInspectionCodes = oRecord.np_on_Codes?.results || [];
-                            const sStatus = oRecord.Status;
-
-                            resolve({
-                                status: sStatus,
-                                codes: aInspectionCodes
-                            });
-                        } else {
-                            resolve({
-                                status: "",
-                                codes: []
-                            });
-                        }
-                    },
-                    error: (oError) => {
-                        console.error("Error fetching inspection data:", oError);
-                        resolve({
-                            status: "",
-                            codes: []
-                        });
-                    }
-                });
-            });
+            const aFilters = this._createHeaderFilters();
+            const oModel = this.getOwnerComponent().getModel();
+            return ODataService.fetchInspectionData(oModel, aFilters);
         },
 
-        _createPDFDefinition(sType, aImages, inspectionData) {
-            const document = this.oModel.getProperty("/document");
-            const sequence = this.oModel.getProperty("/sequenceNumber");
-            const carrier = this.oModel.getProperty("/carrierNumber");
-            const carrierLineCode = this.oModel.getProperty("/carrierLine");
-            const carrierLineDescription = this._getCarrierLineDescription(carrierLineCode);
-            const carrierTypeCode = this.oModel.getProperty("/carrierType");
-            const carrierTypeDescription = this._getCarrierTypeDescription(carrierTypeCode);
-            const sCurrentUser = this._getCurrentUser();
-
-            // Get inspection status and codes
-            const sStatus = inspectionData?.status || "";
-            const aInspectionCodes = inspectionData?.codes || [];
-            const sStatusText = sStatus === 'A' ? 'ACCEPTED' : sStatus === 'R' ? 'REJECTED' : 'PENDING';
-
-            const imageContent = [];
-
-            aImages.forEach((oImage, index) => {
-                if (index > 0) {
-                    imageContent.push({ text: '', pageBreak: 'before' });
-                }
-
-                imageContent.push({
-                    text: `${sType === 'B' ? 'Before' : 'After'} Loading - Image ${index + 1}/${aImages.length}`,
-                    style: 'imageHeader',
-                    margin: [0, 0, 0, 10]
-                });
-
-                imageContent.push({
-                    text: `Captured: ${new Date(oImage.timestamp).toLocaleString()}`,
-                    style: 'timestamp',
-                    margin: [0, 0, 0, 15]
-                });
-
-                imageContent.push({
-                    image: oImage.base64,
-                    width: 500,
-                    alignment: 'center'
-                });
-            });
-
-            // Build inspection codes table body
-            const metadataTableBody = [
-                ['Document:', document],
-                ['Sequence:', sequence],
-                ['Carrier Number:', carrier],
-                ['Carrier Line:', carrierLineDescription],
-                ['Carrier Type:', carrierTypeDescription],
-                ['Inspection Status:', { text: sStatusText, bold: true, color: sStatus === 'A' ? '#00AA00' : sStatus === 'R' ? '#CC0000' : '#666666' }],
-                ['Inspection Date:', new Date().toLocaleString()],
-                ['Total Images:', aImages.length.toString()],
-                ['Inspector:', sCurrentUser]
-            ];
-
-            // Add inspection codes section if codes exist
-            let inspectionCodesContent = [];
-            if (aInspectionCodes.length > 0) {
-                inspectionCodesContent = [
-                    {
-                        text: 'INSPECTION CODES',
-                        style: 'sectionHeader',
-                        margin: [0, 20, 0, 10]
-                    },
-                    {
-                        style: 'codesTable',
-                        table: {
-                            widths: [60, '*'],
-                            headerRows: 1,
-                            body: [
-                                [
-                                    { text: 'Code', style: 'tableHeader', fillColor: '#0854A0', color: '#FFFFFF' },
-                                    { text: 'Description', style: 'tableHeader', fillColor: '#0854A0', color: '#FFFFFF' }
-                                ],
-                                ...aInspectionCodes.map(code => [
-                                    code.CodeValue || '',
-                                    code.CodeText || ''
-                                ])
-                            ]
-                        },
-                        layout: 'lightHorizontalLines',
-                        margin: [0, 0, 0, 20]
-                    }
-                ];
-            }
-
-            return {
-                info: {
-                    title: `${sType === 'B' ? 'Before' : 'After'} Loading Images`,
-                    author: 'Inspection Tracker',
-                    subject: `Container Inspection - ${document}`
-                },
-                pageSize: 'A4',
-                pageOrientation: 'landscape',
-                pageMargins: [40, 60, 40, 60],
-                header: {
-                    text: 'CONTAINER INSPECTION REPORT',
-                    style: 'header',
-                    alignment: 'center',
-                    margin: [0, 20, 0, 0]
-                },
-                footer: function (currentPage, pageCount) {
-                    return {
-                        text: `Page ${currentPage} of ${pageCount}`,
-                        alignment: 'center',
-                        margin: [0, 10, 0, 0]
-                    };
-                },
-                content: [
-                    {
-                        text: `${sType === 'B' ? 'BEFORE' : 'AFTER'} LOADING IMAGES`,
-                        style: 'title',
-                        margin: [0, 0, 0, 20]
-                    },
-                    {
-                        style: 'metadataTable',
-                        table: {
-                            widths: [120, '*'],
-                            body: metadataTableBody
-                        },
-                        layout: 'lightHorizontalLines',
-                        margin: [0, 0, 0, 10]
-                    },
-                    ...inspectionCodesContent,
-                    { text: '', pageBreak: 'after' },
-                    ...imageContent
-                ],
-                styles: {
-                    header: {
-                        fontSize: 20,
-                        bold: true,
-                        color: '#0854A0'
-                    },
-                    title: {
-                        fontSize: 14,
-                        bold: true,
-                        alignment: 'center',
-                        color: '#0854A0'
-                    },
-                    metadataTable: {
-                        fontSize: 11,
-                        margin: [0, 5, 0, 15]
-                    },
-                    sectionHeader: {
-                        fontSize: 14,
-                        bold: true,
-                        color: '#0854A0'
-                    },
-                    tableHeader: {
-                        fontSize: 11,
-                        bold: true
-                    },
-                    codesTable: {
-                        fontSize: 10,
-                        margin: [0, 5, 0, 15]
-                    },
-                    imageHeader: {
-                        fontSize: 16,
-                        bold: true,
-                        color: '#0854A0'
-                    },
-                    timestamp: {
-                        fontSize: 10,
-                        italics: true,
-                        color: '#666666'
-                    }
-                }
-            };
-        },
 
         _getCurrentUser() {
-            try {
-                if (sap.ushell && sap.ushell.Container) {
-                    const oUserInfo = sap.ushell.Container.getService("UserInfo");
-                    return oUserInfo.getId();
-                }
-            } catch (error) {
-                console.warn("UserInfo service not available:", error);
-            }
-
-            try {
-                const oModel = this.getOwnerComponent().getModel();
-                const oHeaders = oModel.getHeaders();
-                if (oHeaders && oHeaders["sap-client"]) {
-                    return oHeaders["x-user"] || "SYSTEM_USER";
-                }
-            } catch (error) {
-                console.warn("Unable to get user from model:", error);
-            }
-
-            return "UNKNOWN_USER";
+            const oModel = this.getOwnerComponent().getModel();
+            return UserHelper.getCurrentUser(oModel);
         },
 
         _uploadPDFToBackend(pdfBlob, slug, imageType, imageCount) {
             const that = this;
             const oModel = this.getOwnerComponent().getModel();
 
-            return new Promise((resolve, reject) => {
-                oModel.refreshSecurityToken(
-                    function () {
-                        const sCSRFToken = oModel.getSecurityToken();
-                        const sUrl = oModel.sServiceUrl + "/AttachmentSet";
-
-                        const mHeaders = {
-                            "Content-Type": "application/pdf",
-                            "slug": slug,
-                            "X-CSRF-Token": sCSRFToken,
-                            "X-Requested-With": "XMLHttpRequest"
-                        };
-
-                        jQuery.ajax({
-                            url: sUrl,
-                            type: "POST",
-                            data: pdfBlob,
-                            headers: mHeaders,
-                            processData: false,
-                            contentType: "application/pdf",
-                            success: function (data) {
-                                console.log("Upload successful:", data);
-
-                                if (imageType === "B") {
-                                    that.oModel.setProperty("/beforeImages", []);
-                                    that.oModel.setProperty("/beforeImageCount", 0);
-                                } else {
-                                    that.oModel.setProperty("/afterImages", []);
-                                    that.oModel.setProperty("/afterImageCount", 0);
-                                }
-
-                                that.oModel.refresh(true);
-                                that._updateHeaderFlagsAfterUpload(imageType);
-
-                                console.log(`${imageCount} ${imageType === 'B' ? 'before' : 'after'} loading images saved successfully`);
-                                resolve();
-                            },
-                            error: function (jqXHR, textStatus, errorThrown) {
-                                console.error("Upload failed:", textStatus, errorThrown);
-                                let sErrorMsg = "Upload failed: " + textStatus;
-                                if (jqXHR.responseText) {
-                                    try {
-                                        const oError = JSON.parse(jqXHR.responseText);
-                                        if (oError.error && oError.error.message) {
-                                            sErrorMsg = oError.error.message.value;
-                                        }
-                                    } catch (e) {
-                                        sErrorMsg = jqXHR.responseText;
-                                    }
-                                }
-                                reject(new Error(sErrorMsg));
-                            }
-                        });
-                    },
-                    function () {
-                        console.error("Could not refresh CSRF token");
-                        reject(new Error("Could not refresh CSRF token"));
+            return ODataService.uploadPDF(oModel, pdfBlob, slug)
+                .then(() => {
+                    if (imageType === "B") {
+                        that.oModel.setProperty("/beforeImages", []);
+                        that.oModel.setProperty("/beforeImageCount", 0);
+                    } else {
+                        that.oModel.setProperty("/afterImages", []);
+                        that.oModel.setProperty("/afterImageCount", 0);
                     }
-                );
-            });
+
+                    that.oModel.refresh(true);
+                    that._updateHeaderFlagsAfterUpload(imageType);
+
+                    console.log(`${imageCount} ${imageType === 'B' ? 'before' : 'after'} loading images saved successfully`);
+                });
         },
 
         _updateHeaderFlagsAfterUpload(imageType) {
-            console.log("=== UPDATING HEADER FLAGS ===");
-
             const aFilters = this._createHeaderFilters();
             const oModel = this.getOwnerComponent().getModel();
 
-            oModel.read("/InspectionHeaderSet", {
-                filters: aFilters,
-                success: (oData) => {
-                    if (oData.results && oData.results.length > 0) {
-                        const oRecord = oData.results[0];
-
-                        const oUpdateData = {
-                            ChangedBy: "USER",
-                            ChangedOn: new Date()
-                        };
-
-                        if (imageType === "B") {
-                            oUpdateData.HasBeforeImg = true;
-                        } else {
-                            oUpdateData.HasAfterImg = true;
-                        }
-
-                        const sKey = oModel.createKey("/InspectionHeaderSet", {
-                            Document: oRecord.Document,
-                            Sequencenumber: oRecord.Sequencenumber,
-                            CarrierNumber: oRecord.CarrierNumber,
-                            InspectionDate: oRecord.InspectionDate
-                        });
-
-                        oModel.update(sKey, oUpdateData, {
-                            success: function () {
-                                console.log("Header flags updated successfully");
-                            },
-                            error: function (oError) {
-                                console.error("Failed to update header flags:", oError);
-                                MessageBox.error("Failed to update inspection flags");
-                            }
-                        });
-                    } else {
-                        console.error("Cannot find inspection record to update");
-                        MessageBox.error("Cannot find inspection record to update");
-                    }
-                },
-                error: (oError) => {
-                    console.error("Error reading header:", oError);
-                    MessageBox.error("Failed to read inspection record");
-                }
-            });
+            ODataService.updateHeaderFlags(oModel, aFilters, imageType)
+                .catch(() => {
+                    MessageBox.error("Failed to update inspection flags");
+                });
         },
 
         // ========================================
@@ -1501,10 +1003,8 @@ sap.ui.define([
             this._clearInputFields();
 
             const oDefectCodes = this.oModel.getProperty("/defectCodes");
-            Object.keys(oDefectCodes).forEach(sKey => {
-                oDefectCodes[sKey] = false;
-            });
-            this.oModel.setProperty("/defectCodes", oDefectCodes);
+            const resetCodes = InspectionCodeService.resetDefectCodes(oDefectCodes);
+            this.oModel.setProperty("/defectCodes", resetCodes);
             this._uncheckAllCheckboxes();
 
             this.oModel.setProperty("/beforeImages", []);
@@ -1689,6 +1189,20 @@ sap.ui.define([
                 }
             }, 100);
         },
+        onCopyCarrier: function () {
+            const oInput = this.byId("carrierInput");
+            const value = oInput.getValue();
+
+            if (!value) {
+                console.warn("No carrier number to copy.");
+                return;
+            }
+
+            navigator.clipboard.writeText(value)
+                .then(() => console.log("Copied:", value))
+                .catch(err => console.error("Copy failed:", err));
+        },
+
 
         _setImageButtonStates() {
             const hasBeforeImg = this.oModel.getProperty("/hasBeforeImg");
@@ -1714,6 +1228,422 @@ sap.ui.define([
                 btnBefore.setEnabled(true);
                 btnAfter.setEnabled(false);
             }
+        },
+        onContainerScan() {
+
+            var that = this;
+
+            // Destroy any existing camera dialog to avoid conflicts
+            if (this._cameraDialog) {
+                this._cameraDialog.destroy();
+                this._cameraDialog = null;
+            }
+            this._cameraDialog = new sap.m.Dialog({
+                title: "Camera Preview",
+                draggable: true,
+                contentWidth: "600px",
+                contentHeight: "420px",
+                content: new sap.m.VBox({
+                    items: [
+                        new sap.m.VBox({
+                            id: "cameraVideoContainer",
+                            width: "100%",
+                            height: "400px"
+                        })
+                    ]
+                }),
+                beginButton: new sap.m.Button({
+                    text: "Capture",
+                    type: "Emphasized",
+                    press: function () { that.onCaptureCarrierNo(); }
+                }),
+                endButton: new sap.m.Button({
+                    text: "Cancel",
+                    press: function () {
+                        that.onCloseCameraDialog();
+                    }
+                }),
+                afterClose: function () {
+                    that._cleanupCamera();
+                }
+            });
+            this.getView().addDependent(this._cameraDialog);
+
+
+            this._cameraDialog.open();
+
+            setTimeout(function () {
+                var oContainer = sap.ui.getCore().byId("cameraVideoContainer");
+                if (oContainer && oContainer.getDomRef()) {
+                    var containerDom = oContainer.getDomRef();
+
+                    ImageService.initializeCamera(containerDom)
+                        .then(function (video) {
+                            that._stream = ImageService._stream;
+                            that._videoElement = video;
+                        })
+                        .catch(function (err) {
+                            console.error("Camera initialization failed:", err);
+                        });
+                }
+            }, 300);
+        },
+
+        onCaptureCarrierNo: async function () {
+            console.log("=== CAPTURE CARRIER NUMBER CLICKED ===");
+
+            var video = this._videoElement;
+            if (!video) {
+                MessageToast.show("Video not ready!");
+                return;
+            }
+
+            sap.ui.core.BusyIndicator.show(0);
+
+            try {
+                // Capture image from video
+                var canvas = document.createElement("canvas");
+                canvas.width = video.videoWidth;
+                canvas.height = video.videoHeight;
+                canvas.getContext("2d").drawImage(video, 0, 0);
+
+                // Create image element for YOLO processing
+                const imageUrl = canvas.toDataURL('image/png');
+                const img = new Image();
+
+                await new Promise((resolve, reject) => {
+                    img.onload = resolve;
+                    img.onerror = reject;
+                    img.src = imageUrl;
+                });
+
+                // Run YOLO inference
+                console.log("🔍 Running YOLO detection...");
+                const detections = await YOLOInference.runInference(img);
+                console.log("YOLO detections:", detections);
+
+                if (!detections || detections.length === 0) {
+                    sap.ui.core.BusyIndicator.hide();
+                    MessageBox.warning("No container detected. Please position the camera to capture the container number clearly.");
+                    return;
+                }
+
+                console.log(`✅ Found ${detections.length} container(s)`);
+
+                // Get the detection with highest confidence
+                const detection = detections[0];
+
+                // Create canvas for cropped region
+                const cropCanvas = document.createElement('canvas');
+                const width = detection.x2 - detection.x1;
+                const height = detection.y2 - detection.y1;
+
+                cropCanvas.width = width;
+                cropCanvas.height = height;
+                const ctx = cropCanvas.getContext('2d');
+
+                // Draw cropped region
+                ctx.drawImage(
+                    img,
+                    detection.x1,
+                    detection.y1,
+                    width,
+                    height,
+                    0,
+                    0,
+                    width,
+                    height
+                );
+
+                // Get cropped image as base64
+                const croppedImageData = cropCanvas.toDataURL('image/png');
+
+                console.log(`\n📦 Detection 1:`);
+                console.log(`   YOLO Confidence: ${(detection.confidence * 100).toFixed(1)}%`);
+                console.log(`   Bounding Box: [${detection.x1.toFixed(0)}, ${detection.y1.toFixed(0)}, ${detection.x2.toFixed(0)}, ${detection.y2.toFixed(0)}]`);
+                console.log(`   Size: ${width.toFixed(0)}x${height.toFixed(0)}px`);
+                console.log(`   🖼️  Cropped Image Data:`, croppedImageData.substring(0, 100) + '...');
+                console.log(`   📸 Full Cropped Image (Base64):`, croppedImageData);
+
+                // Send to backend OCR API
+                console.log(`\n🔄 Sending cropped image to OCR API...`);
+                const ocrResult = await this._sendToOCR(croppedImageData);
+
+                sap.ui.core.BusyIndicator.hide();
+
+                console.log(`\n📋 OCR API Response:`, ocrResult);
+
+                if (ocrResult.success) {
+                    // Validate and reconstruct container number
+                    const validationResult = this._validateAndReconstructContainerNumber(ocrResult);
+
+                    console.log(`\n✅ OCR Success!`);
+                    console.log(`   📦 Container Number: ${ocrResult.container_number}`);
+                    console.log(`   Confidence: ${(ocrResult.confidence * 100).toFixed(1)}%`);
+                    console.log(`\n   Owner Code: ${ocrResult.owner_code || 'N/A'}`);
+                    console.log(`   Equipment Type: ${ocrResult.equipment_type || 'N/A'}`);
+                    console.log(`   Serial Number: ${ocrResult.serial_number || 'N/A'}`);
+                    console.log(`   Check Digit: ${ocrResult.check_digit || 'N/A'}`);
+                    if (ocrResult.size_type) {
+                        console.log(`   Size/Type: ${ocrResult.size_type}`);
+                    }
+                    console.log(`\n   Raw Container Number: ${ocrResult.raw_container_number || 'N/A'}`);
+
+                    if (validationResult.isValid) {
+                        console.log(`   ✅ Validation Passed`);
+                        console.log(`   📝 Final Container Number: ${validationResult.finalContainerNumber}`);
+                        console.log(`   Length: ${validationResult.finalContainerNumber.length} characters`);
+
+                        // Set the validated container number in the input field
+                        this.byId("carrierInput").setValue(validationResult.finalContainerNumber);
+                        this.oModel.setProperty("/carrierNumber", validationResult.finalContainerNumber);
+
+                        // Trigger validation
+                        this.onDocumentDetailsChange();
+
+                        MessageToast.show("Container number detected: " + validationResult.finalContainerNumber);
+                    } else {
+                        console.log(`\n⚠️  Validation Issues Found:`);
+                        validationResult.missingComponents.forEach(comp => {
+                            console.log(`   ❌ Missing: ${comp}`);
+                        });
+
+                        MessageBox.error(
+                            `Container number incomplete. Cannot proceed.\n\n${validationResult.missingComponents.join('\n')}\n\nPlease retake by zooming in or moving closer to the container.`,
+                            {
+                                title: "Incomplete Container Number",
+                                onClose: () => {
+                                    // Clear the carrier input field
+                                    this.byId("carrierInput").setValue("");
+                                    this.oModel.setProperty("/carrierNumber", "");
+                                }
+                            }
+                        );
+                    }
+                } else {
+                    console.log(`\n❌ OCR Failed`);
+                    console.log(`   Error: ${ocrResult.error || 'Unknown error'}`);
+                    if (ocrResult.raw_container_number) {
+                        console.log(`   Raw text extracted: ${ocrResult.raw_container_number}`);
+                    }
+                    MessageBox.warning("Could not extract container number from the detected region. Please enter manually.");
+                }
+
+                this._cameraDialog.close();
+
+            } catch (error) {
+                console.error("Error during container detection:", error);
+                sap.ui.core.BusyIndicator.hide();
+                MessageBox.error("Failed to detect container number: " + error.message);
+            }
+        },
+
+        _validateAndReconstructContainerNumber(ocrResult) {
+            const missingComponents = [];
+
+            // FIRST PRIORITY: Use raw_container_number if available
+            if (ocrResult.raw_container_number && ocrResult.raw_container_number.trim().length > 0) {
+                const rawContainerNo = ocrResult.raw_container_number.replace(/ /g, '');
+                console.log(`   ✅ Using raw_container_number: "${ocrResult.raw_container_number}" -> "${rawContainerNo}"`);
+
+                // Validate minimum length
+                if (rawContainerNo.length < 11) {
+                    return {
+                        isValid: false,
+                        missingComponents: [`Container number too short (${rawContainerNo.length} chars, expected at least 11)`],
+                        warnings: [],
+                        finalContainerNumber: rawContainerNo
+                    };
+                }
+
+                // If raw container number is complete (15 chars), use it directly
+                if (rawContainerNo.length === 15) {
+                    return {
+                        isValid: true,
+                        missingComponents: [],
+                        warnings: [],
+                        finalContainerNumber: rawContainerNo
+                    };
+                }
+
+                // If length is between 11-14 OR greater than 15, try to reconstruct to exactly 15 chars
+                if (rawContainerNo.length !== 15) {
+                    console.log(`   ⚠️  Container number length is ${rawContainerNo.length}, reconstructing to 15 chars...`);
+
+                    const ownerCode = ocrResult.owner_code || '';
+                    const equipmentType = ocrResult.equipment_type || '';
+                    const serialNumber = ocrResult.serial_number || '';
+                    const checkDigit = ocrResult.check_digit || '';
+                    let sizeType = ocrResult.size_type || '';
+
+                    // Check if we have all critical components
+                    if (!ownerCode || ownerCode.length !== 3) {
+                        missingComponents.push('Owner Code (3 letters)');
+                    }
+                    if (!equipmentType || equipmentType.length !== 1) {
+                        missingComponents.push('Equipment Type (1 letter)');
+                    }
+                    if (!serialNumber || serialNumber.length !== 6) {
+                        missingComponents.push('Serial Number (6 digits)');
+                    }
+                    if (!checkDigit || checkDigit.length !== 1) {
+                        missingComponents.push('Check Digit (1 digit)');
+                    }
+
+                    // FALLBACK: If size_type is missing or null, try to extract from raw_container_number
+                    if (!sizeType || sizeType.trim().length === 0) {
+                        console.log(`   ⚠️  Size/Type missing from OCR response, attempting to extract from raw_container_number...`);
+
+                        // Try to extract size/type from the end of raw_container_number
+                        // Pattern: 2 digits + 1 letter + 1 digit (e.g., 22G1, 45G1) OR 2 digits + 2 letters (e.g., 40HC)
+                        const rawNoSpaces = ocrResult.raw_container_number.replace(/ /g, '');
+                        const sizeTypePattern = /(\d{2}[A-Z]\d|\d{2}[A-Z]{2})$/;
+                        const sizeTypeMatch = rawNoSpaces.match(sizeTypePattern);
+
+                        if (sizeTypeMatch) {
+                            sizeType = sizeTypeMatch[1];
+                            console.log(`   ✅ Extracted Size/Type from raw_container_number: ${sizeType}`);
+                        } else {
+                            console.log(`   ❌ Could not extract Size/Type from raw_container_number`);
+                            missingComponents.push('Size/Type Code (ISO code like 22G1, 45G1)');
+                        }
+                    }
+
+                    // If any critical component is missing, return invalid
+                    if (missingComponents.length > 0) {
+                        return {
+                            isValid: false,
+                            missingComponents: missingComponents.map(c => `⚠️ ${c} is missing. Please retake by zooming or moving closer.`),
+                            warnings: [],
+                            finalContainerNumber: rawContainerNo
+                        };
+                    }
+
+                    // All components present - reconstruct properly
+                    // Format: OwnerCode(3) + EquipmentType(1) + SerialNumber(6) + CheckDigit(1) + SizeType(4) = 15 chars
+                    const cleanSizeType = sizeType.replace(/ /g, '').substring(0, 4); // Ensure size type is exactly 4 chars
+                    const reconstructed = `${ownerCode}${equipmentType}${serialNumber}${checkDigit}${cleanSizeType}`;
+
+                    console.log(`   📝 Reconstructed from components: "${reconstructed}" (Length: ${reconstructed.length})`);
+
+                    // Final validation
+                    if (reconstructed.length !== 15) {
+                        return {
+                            isValid: false,
+                            missingComponents: [`⚠️ Container number incomplete (${reconstructed.length} chars, expected 15). Please retake by zooming or moving closer.`],
+                            warnings: [],
+                            finalContainerNumber: reconstructed
+                        };
+                    }
+
+                    return {
+                        isValid: true,
+                        missingComponents: [],
+                        warnings: [],
+                        finalContainerNumber: reconstructed
+                    };
+                }
+
+                // Length is already 15
+                return {
+                    isValid: true,
+                    missingComponents: [],
+                    warnings: [],
+                    finalContainerNumber: rawContainerNo
+                };
+            }
+
+            // FALLBACK: Reconstruct from individual components if raw_container_number is not available
+            console.log(`   ⚠️  raw_container_number not available, reconstructing from individual components...`);
+
+            const ownerCode = ocrResult.owner_code || '';
+            const equipmentType = ocrResult.equipment_type || '';
+            const serialNumber = ocrResult.serial_number || '';
+            const checkDigit = ocrResult.check_digit || '';
+            let sizeType = ocrResult.size_type || '';
+
+            // Validate each component
+            if (!ownerCode || ownerCode.length !== 3) {
+                missingComponents.push('Owner Code (3 letters)');
+            }
+            if (!equipmentType || equipmentType.length !== 1) {
+                missingComponents.push('Equipment Type (1 letter)');
+            }
+            if (!serialNumber || serialNumber.length !== 6) {
+                missingComponents.push('Serial Number (6 digits)');
+            }
+            if (!checkDigit || checkDigit.length !== 1) {
+                missingComponents.push('Check Digit (1 digit)');
+            }
+
+            // Even in fallback, try to get size_type if it's missing
+            if (!sizeType || sizeType.trim().length === 0) {
+                console.log(`   ⚠️  Size/Type missing in fallback mode`);
+                missingComponents.push('Size/Type Code (ISO code like 22G1, 45G1)');
+            }
+
+            // If any critical component is missing, return invalid
+            if (missingComponents.length > 0) {
+                return {
+                    isValid: false,
+                    missingComponents: missingComponents.map(c => `⚠️ ${c} is missing. Please retake by zooming or moving closer.`),
+                    warnings: [],
+                    finalContainerNumber: ''
+                };
+            }
+
+            // Reconstruct: OwnerCode(3) + EquipmentType(1) + SerialNumber(6) + CheckDigit(1) + SizeType(4)
+            const cleanSizeType = sizeType.replace(/ /g, '').substring(0, 4); // Ensure exactly 4 chars
+            const finalContainerNumber = `${ownerCode}${equipmentType}${serialNumber}${checkDigit}${cleanSizeType}`;
+
+            console.log(`   📝 Reconstructed: "${finalContainerNumber}" (Length: ${finalContainerNumber.length})`);
+
+            // Validate final length - must be exactly 15
+            if (finalContainerNumber.length !== 15) {
+                return {
+                    isValid: false,
+                    missingComponents: [`⚠️ Container number incomplete (${finalContainerNumber.length} chars, expected 15). Please retake by zooming or moving closer.`],
+                    warnings: [],
+                    finalContainerNumber: finalContainerNumber
+                };
+            }
+
+            return {
+                isValid: true,
+                missingComponents: [],
+                warnings: [],
+                finalContainerNumber: finalContainerNumber
+            };
+        },
+
+        async _sendToOCR(imageBase64) {
+            // const API_URL = "https://container-ocr-api.c-313aa05.kyma.ondemand.com/api/ocr";
+            // const API_URL = "http://localhost:5000/api/ocr";
+            const API_URL = "https://container-ocr-api.a2916c6.kyma.ondemand.com/api/ocr";
+
+
+            try {
+                const response = await fetch(API_URL, {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json',
+                    },
+                    body: JSON.stringify({
+                        image: imageBase64
+                    })
+                });
+
+                if (!response.ok) {
+                    throw new Error(`HTTP error! status: ${response.status}`);
+                }
+
+                const result = await response.json();
+                return result;
+            } catch (error) {
+                console.error("OCR API Error:", error);
+                throw error;
+            }
         }
+
     });
 });
