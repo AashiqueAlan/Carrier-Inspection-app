@@ -1,6 +1,6 @@
 sap.ui.define([], () => {
     "use strict";
-
+    const CF_HOST = "https://model-host.a2916c6.kyma.ondemand.com";
     return {
         session: null,
         inputWidth: 640,
@@ -13,7 +13,7 @@ sap.ui.define([], () => {
             }
 
             return new Promise((resolve, reject) => {
-                const scriptPath = sap.ui.require.toUrl("insptrack/lib/ort.min.js");
+                const scriptPath = `${CF_HOST}/lib/ort.min.js`;
 
                 if (document.querySelector(`script[src="${scriptPath}"]`)) {
                     this._onnxLoaded = true;
@@ -23,13 +23,27 @@ sap.ui.define([], () => {
 
                 const script = document.createElement('script');
                 script.src = scriptPath;
+                script.crossOrigin = "use-credentials";  ;  // Enable CORS for script loading
                 script.onload = () => {
                     console.log("✅ ONNX Runtime loaded from:", scriptPath);
                     this._onnxLoaded = true;
                     resolve();
                 };
-                script.onerror = () => {
-                    reject(new Error("Failed to load ONNX Runtime"));
+                script.onerror = (error) => {
+                    console.error("❌ Script load failed:", error);
+                    console.error("This may be a CORS issue. Attempting fallback...");
+                    // Try again without crossOrigin as fallback
+                    const fallbackScript = document.createElement('script');
+                    fallbackScript.src = scriptPath;
+                    fallbackScript.onload = () => {
+                        console.log("✅ ONNX Runtime loaded (via fallback)");
+                        this._onnxLoaded = true;
+                        resolve();
+                    };
+                    fallbackScript.onerror = () => {
+                        reject(new Error("Failed to load ONNX Runtime from " + scriptPath));
+                    };
+                    document.head.appendChild(fallbackScript);
                 };
                 document.head.appendChild(script);
             });
@@ -41,20 +55,26 @@ sap.ui.define([], () => {
             }
 
             try {
+                
                 await this._loadONNXRuntime();
                 await new Promise(resolve => setTimeout(resolve, 500));
 
                 if (typeof window.ort === 'undefined') {
                     throw new Error("ONNX Runtime not available");
                 }
-
+                
                 const ort = window.ort;
 
                 // Configure WASM for ONNX Runtime 1.19.0
                 ort.env.wasm.numThreads = 1;
-                ort.env.wasm.wasmPaths = sap.ui.require.toUrl("insptrack/lib/");
+                ort.env.wasm.wasmPaths = {
+                    "wasm-wasm": `${CF_HOST}/lib/ort-wasm.wasm`,
+                    "wasm-simd": `${CF_HOST}/lib/ort-wasm-simd.wasm`
+                };
 
-                const modelPath = sap.ui.require.toUrl("insptrack/model/container_model.onnx");
+
+
+                const modelPath = `${CF_HOST}/models/container_model.onnx`;
                 console.log("📦 Loading model from:", modelPath);
 
                 this.session = await ort.InferenceSession.create(modelPath, {
