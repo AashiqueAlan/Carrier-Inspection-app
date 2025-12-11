@@ -829,12 +829,24 @@ sap.ui.define([
                     this._getCarrierTypeDescription.bind(this),
                     sCurrentUser
                 );
+                console.log("=== PDF DEBUG LOGGING ===");
+                console.log("PDF pageSize:", docDefinition.pageSize);
+                console.log("PDF pageOrientation:", docDefinition.pageOrientation);
+                console.log("PDF pageMargins:", docDefinition.pageMargins);
+                console.log("Images count:", aImages.length);
+                console.log("Device pixel ratio:", window.devicePixelRatio);
+                console.log("User agent:", navigator.userAgent);
+                console.log("First image block:", docDefinition.content[docDefinition.content.length - 1]);
+                // console.log("Content length before images:", docDefinition.content.length - imageContent.length);
 
                 const pdfBase64 = await PDFService.generatePDF(docDefinition);
                 const pdfBlob = PDFService.base64ToBlob(pdfBase64);
                 const slug = PDFService.generateSlug(oHeaderData.document, imageType);
 
                 console.log("Upload SLUG:", slug);
+
+
+
 
                 await this._uploadPDFToBackend(pdfBlob, slug, imageType, aImages.length);
 
@@ -1423,9 +1435,46 @@ sap.ui.define([
                 } else {
                     console.log(`\n❌ OCR Failed`);
                     console.log(`   Error: ${ocrResult.error || 'Unknown error'}`);
+
+                    // NEW: Check if raw_container_number exists even on failure
                     if (ocrResult.raw_container_number) {
                         console.log(`   Raw text extracted: ${ocrResult.raw_container_number}`);
+
+                        // Clean raw text: remove spaces and normalize
+                        const cleanedRawNumber = ocrResult.raw_container_number.replace(/\s+/g, '');
+                        console.log(`   Cleaned raw number: ${cleanedRawNumber}`);
+
+                        // Create mock OCR response using cleaned raw data
+                        const fallbackOcrResult = {
+                            success: true,
+                            container_number: cleanedRawNumber,
+                            raw_container_number: cleanedRawNumber,
+                            confidence: 0.7, // Lower confidence for fallback
+                            owner_code: cleanedRawNumber.substring(0, 4),
+                            serial_number: cleanedRawNumber.substring(4, 10),
+                            check_digit: cleanedRawNumber.substring(10, 11),
+                            equipment_type: cleanedRawNumber.substring(11, 12) || 'U',
+                            size_type: cleanedRawNumber.substring(11) || 'N/A'
+                        };
+
+                        // Validate the fallback result
+                        const validationResult = this._validateAndReconstructContainerNumber(fallbackOcrResult);
+
+                        if (validationResult.isValid) {
+                            console.log(`   ✅ Fallback validation passed: ${validationResult.finalContainerNumber}`);
+
+                            // Set the validated container number
+                            this.byId("carrierInput").setValue(validationResult.finalContainerNumber);
+                            this.oModel.setProperty("/carrierNumber", validationResult.finalContainerNumber);
+                            this.onDocumentDetailsChange();
+
+                            MessageToast.show(`Container detected from raw OCR: ${validationResult.finalContainerNumber}`);
+                            this._cameraDialog.close();
+                            return; // Exit early on successful fallback
+                        }
                     }
+
+                    // Original error handling only if no raw data or validation fails
                     MessageBox.warning("Could not extract container number from the detected region. Please enter manually.");
                 }
 
@@ -1437,6 +1486,49 @@ sap.ui.define([
                 MessageBox.error("Failed to detect container number: " + error.message);
             }
         },
+
+        onViewFullImage: function (oEvent) {
+            // The thumbnail Image control
+            const oImage = oEvent.getSource();
+
+            // Base64 + metadata from the model
+            const oCtx = oImage.getBindingContext();
+            const oData = oCtx ? oCtx.getObject() : null;
+
+            // DOM image element
+            const oDomRef = oImage.getDomRef();
+            if (!oDomRef) {
+                console.log("onViewFullImage: no DOM ref for image");
+                return;
+            }
+
+            // 1) Actual rendered size of the thumbnail in the list
+            const renderedWidth = oDomRef.clientWidth;
+            const renderedHeight = oDomRef.clientHeight;
+
+            // 2) Intrinsic (natural) size of the loaded image
+            const naturalWidth = oDomRef.naturalWidth;
+            const naturalHeight = oDomRef.naturalHeight;
+
+            console.log("=== onViewFullImage DEBUG ===");
+            console.log("Image ID:", oData && oData.id);
+            console.log("Thumbnail rendered size (CSS):", renderedWidth + " x " + renderedHeight);
+            console.log("Image natural size (pixels):", naturalWidth + " x " + naturalHeight);
+
+            // 3) Optional: log the size that is used when generating the PDF
+            //    This matches your capture logic in ImageService.captureImage
+            const tempImg = new Image();
+            tempImg.onload = () => {
+                const pdfCanvasWidth = tempImg.width;
+                const pdfCanvasHeight = tempImg.height;
+                console.log("PDF capture canvas size (video frame):",
+                    pdfCanvasWidth + " x " + pdfCanvasHeight);
+            };
+            tempImg.src = oData && oData.base64;
+
+            // Here you can also open a dialog to show the full image if you like.
+        },
+
 
         _validateAndReconstructContainerNumber(ocrResult) {
             const missingComponents = [];
@@ -1615,6 +1707,8 @@ sap.ui.define([
                 finalContainerNumber: finalContainerNumber
             };
         },
+
+
 
         async _sendToOCR(imageBase64) {
             // const API_URL = "https://container-ocr-api.c-313aa05.kyma.ondemand.com/api/ocr";

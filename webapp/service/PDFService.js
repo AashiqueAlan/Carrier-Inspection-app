@@ -58,10 +58,18 @@ sap.ui.define([
                 });
 
                 imageContent.push({
-                    image: oImage.base64,
-                    width: 500,
-                    alignment: 'center'
+                    table: {
+                        widths: ['*'],
+                        body: [[{
+                            image: oImage.base64,
+                            fit: [700, 400], 
+                            alignment: 'center'
+                        }]]
+                    },
+                    layout: 'noBorders',
+                    margin: [0, 0, 0, 10]
                 });
+
             });
 
             const metadataTableBody = [

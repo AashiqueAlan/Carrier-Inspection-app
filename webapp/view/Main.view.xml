@@ -48,25 +48,15 @@
                                
                                 <Label id="_IDGenLabel1" text="Carrier Number" required="true"/>
                                 <HBox alignItems="Center" justifyContent="Start">
-                                    
-                                    <!-- <Button id="carrierScanBtn" 
-                                        type="Transparent" 
-                                        icon="sap-icon://web-cam" 
-                                        press="onContainerScan"
-                                        tooltip="Scan Carrier Number"/> -->
                                     <Input id="carrierInput"
                                         change="onDocumentDetailsChange"
                                         placeholder="carrier number"
                                         width="250px"
                                         maxLength="15"
                                         showValueHelp = "true"
-                                        
                                         valueHelpIconSrc = "sap-icon://camera"
                                         valueHelpRequest = "onContainerScan"
-                                        />
-                                    
-                                     
-                                        
+                                        />    
                                 </HBox>
                                
                                     
