@@ -25,18 +25,26 @@ sap.ui.define([
                 video.style.position = "relative";
                 containerDom.appendChild(video);
 
+                // Get screen orientation to request appropriate resolution
+                const isPortrait = window.innerHeight > window.innerWidth;
+
                 navigator.mediaDevices.getUserMedia({
                     video: {
                         facingMode: "environment",
-                        width: { ideal: 1280 },
-                        height: { ideal: 720 }
+                        width: { ideal: isPortrait ? 720 : 1280 },
+                        height: { ideal: isPortrait ? 1280 : 720 }
                     }
                 })
                 .then((stream) => {
                     this._stream = stream;
                     video.srcObject = stream;
-                    this._videoElement = video;
-                    resolve(video);
+
+                    // Wait for video metadata to be loaded to get actual dimensions
+                    video.onloadedmetadata = () => {
+                        console.log(`📹 Video loaded - Dimensions: ${video.videoWidth}x${video.videoHeight}`);
+                        this._videoElement = video;
+                        resolve(video);
+                    };
                 })
                 .catch((err) => {
                     MessageToast.show("Cannot access camera: " + err);

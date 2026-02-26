@@ -23,7 +23,7 @@ sap.ui.define([], () => {
 
                 const script = document.createElement('script');
                 script.src = scriptPath;
-                script.crossOrigin = "use-credentials";  ;  // Enable CORS for script loading
+                script.crossOrigin = "anonymous";  ;  // Enable CORS for script loading
                 script.onload = () => {
                     console.log("✅ ONNX Runtime loaded from:", scriptPath);
                     this._onnxLoaded = true;

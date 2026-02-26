@@ -1313,10 +1313,14 @@ sap.ui.define([
             sap.ui.core.BusyIndicator.show(0);
 
             try {
-                // Capture image from video
+                // Capture image from video using actual video dimensions
                 var canvas = document.createElement("canvas");
                 canvas.width = video.videoWidth;
                 canvas.height = video.videoHeight;
+
+                console.log(`📸 Canvas created - Dimensions: ${canvas.width}x${canvas.height}`);
+                console.log(`📹 Video element - Dimensions: ${video.videoWidth}x${video.videoHeight}`);
+
                 canvas.getContext("2d").drawImage(video, 0, 0);
 
                 // Create image element for YOLO processing
