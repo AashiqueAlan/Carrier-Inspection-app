@@ -841,7 +841,7 @@ sap.ui.define([
 
                 const pdfBase64 = await PDFService.generatePDF(docDefinition);
                 const pdfBlob = PDFService.base64ToBlob(pdfBase64);
-                const slug = PDFService.generateSlug(oHeaderData.document, imageType);
+                const slug = PDFService.generateSlug(oHeaderData.document, oHeaderData.carrier ,imageType);
 
                 console.log("Upload SLUG:", slug);
 

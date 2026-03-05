@@ -62,7 +62,7 @@ sap.ui.define([
                         widths: ['*'],
                         body: [[{
                             image: oImage.base64,
-                            fit: [700, 400], 
+                            fit: [700, 400],
                             alignment: 'center'
                         }]]
                     },
@@ -250,10 +250,16 @@ sap.ui.define([
          * @param {string} imageType - Image type (B/A)
          * @returns {string} Slug string
          */
-        generateSlug(document, imageType) {
-            const last2Digits = document.slice(-2);
-            const prefix = imageType === "B" ? "BI" : "AI";
-            return `${document}/${prefix}Atta${last2Digits}(1).pdf`;
+        generateSlug(document, carrier, imageType) {
+            if (!document) {
+                throw new Error("Document number missing");
+            }
+
+            const label = imageType === "B" ? "Before_Image" : "After_Image";
+
+            const fileName = `${carrier}-${label}.pdf`;
+
+            return `${document}/${fileName}`;
         }
     };
 });
