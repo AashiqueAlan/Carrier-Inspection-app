@@ -32,14 +32,17 @@ sap.ui.define([
                 var tempDefine = window.define;
                 var tempExports = window.exports;
 
-                delete window.module;
-                delete window.define;
-                delete window.exports;
+                // delete window.module;
+                // delete window.define;
+                // delete window.exports;
+                window.module = undefined;
+                window.define = undefined;
+                window.exports = undefined;
 
                 jQuery.ajax({
                     url: sLibPath + "/pdfmake.min.js",
                     dataType: "script",
-                    cache: true,
+                    cache: false,
                     success: function() {
                         // Restore module/define/exports
                         if (tempModule) window.module = tempModule;
@@ -57,7 +60,7 @@ sap.ui.define([
                         jQuery.ajax({
                             url: sLibPath + "/vfs_fonts.js",
                             dataType: "script",
-                            cache: true,
+                            cache: false,
                             success: function() {
                                 console.log("vfs_fonts.js loaded");
 

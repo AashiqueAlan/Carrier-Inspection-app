@@ -218,8 +218,13 @@ sap.ui.define([
 
             console.log("pdfMake instance retrieved successfully");
 
-            const pdfBase64 = await new Promise((resolve) => {
-                pdfMakeInstance.createPdf(docDefinition).getBase64(resolve);
+            const pdfBase64 = await new Promise((resolve,reject) => {
+                try{
+                    pdfMakeInstance.createPdf(docDefinition).getBase64(resolve);
+                }catch(err){
+                    reject(err);
+                }
+                
             });
 
             console.log("PDF created successfully, length:", pdfBase64.length);
